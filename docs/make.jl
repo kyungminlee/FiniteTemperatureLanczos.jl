@@ -1,5 +1,5 @@
 using Documenter
-using QuantumHamiltonian
+using FiniteTemperatureLanczos
 
 makedocs(
     modules=[FiniteTemperatureLanczos],
