@@ -4,15 +4,8 @@ using KrylovKit
 export premeasurestatic
 export measure
 
-struct PremeasurementStatic{S<:Number, R<:Real}
-    A::Matrix{S}
-    ρ::Vector{R}
-    E::Vector{R}
-end
-
-
-struct PremeasurementStatic{S<:Tuple{Vararg{<:AbstractMatrix{<:Number}}}, R<:Real}
-    A::S
+struct PremeasurementStatic{R<:Real}
+    A::Vector{Matrix}
     ρ::Vector{R}
     E::Vector{R}
 end
@@ -32,43 +25,77 @@ E_{jl} &= (\epsilon_j + \epsilon_l)/2
 function premeasurestatic end
 
 
-function premeasurestatic(observable::AbstractMatrix, factorization::KrylovKit.LanczosFactorization{T, S}) where {T, S}
-    return premeasurestatic(x -> observable * x, factorization)
-end
+# function premeasurestatic(
+#     factorization::KrylovKit.LanczosFactorization,
+#     observables::AbstractMatrix...
+# )
+#     return premeasurestatic(factorization, [(x -> m * x) for m in observables]...)
+# end
 
 # when observable is callable
-function premeasurestatic(observable, factorization::KrylovKit.LanczosFactorization{T, S}) where {T, S}
-    reducedhamiltonian = SymTridiagonal(factorization.αs, factorization.βs[1:end-1])
-    eigenvalues, reducedeigenvectors = eigen(reducedhamiltonian)
+function premeasurestatic(
+    factorization::KrylovKit.LanczosFactorization{T, R},
+    observables...
+) where {T, R}
+    h = SymTridiagonal(factorization.αs, factorization.βs[1:end-1])
+    e, u = eigen(h)
+
     V = basis(factorization).basis
     d = length(V)
     D = length(V[1])
 
-    Q = eltype(observable(V[1]))
-    apq = zeros(Q, (d, d))
-    for q in 1:d
-        aq = observable(V[q])
+    A = Matrix[]
+    for obs in observables
+        a1 = obs(V[1])
+        Q = eltype(a1)
+        apq = zeros(Q, (d, d))
         for p in 1:d
-            apq[p, q] = dot(V[p], aq)
+            apq[p, 1] = dot(V[p], a1)
         end
+        for q in 2:d
+            aq = obs(V[q])
+            for p in 1:d
+                apq[p, q] = dot(V[p], aq)
+            end
+        end
+        aij = adjoint(u) * apq * u
+        for i in 1:d
+            aij[i, :] .*= u[1, i]
+        end
+        for j in 1:d
+            aij[:, j] .*= conj(u[1, j])
+        end
+        push!(A, aij)
     end
-    aij = adjoint(reducedeigenvectors) * apq * reducedeigenvectors
-    for i in 1:d
-        aij[i, :] .*= reducedeigenvectors[1, i]
-    end
-    for j in 1:d
-        aij[:, j] .*= conj(reducedeigenvectors[1, j])
-    end
-
-    ρi = abs2.(reducedeigenvectors[1, :])
-    return PremeasurementStatic{Q, S}(aij, ρi, eigenvalues)
+    ρ = abs2.(u[1, :])
+    return PremeasurementStatic{R}(A, ρ, e)
 end
 
 
-function measure(sm::PremeasurementStatic{S, R}, temperature::Real) where {S, R}
+function measure(sm::PremeasurementStatic{R}, temperature::Real; tol::Real=Base.rtoldefault(R)) where {R}
+    if abs(temperature) < tol
+        return measurezerotemperature(sm; tol=tol)
+    end
     d = length(sm.E)
-    half_boltzmann = exp.(-(0.5/temperature) .* sm.E)
-    observable = sum(half_boltzmann[i] * half_boltzmann[j] * sm.A[i, j] for i in 1:d for j in 1:d)
+    half_boltzmann = exp.(-(0.5/temperature) .* (sm.E .- minimum(sm.E)))
+    observables = [
+        sum(half_boltzmann[i] * half_boltzmann[j] * A[i, j] for i in 1:d for j in 1:d)
+        for A in sm.A
+    ]
+    energy = sum(half_boltzmann[i] * half_boltzmann[i] * sm.ρ[i] * sm.E[i] for i in 1:d)
     partition = sum(half_boltzmann[i] * half_boltzmann[i] * sm.ρ[i] for i in 1:d)
-    return (observable, partition)
+    return (partition=partition, energy=energy, observables=observables)
+end
+
+
+function measurezerotemperature(sm::PremeasurementStatic{R}; tol::Real=Base.rtoldefault(R)) where {R}
+    d = length(sm.E)
+    idx_groundstate = findall( <(tol), abs.(sm.E .- minimum(sm.E)))
+    observables = [
+        sum(A[i, j] for i in idx_groundstate for j in idx_groundstate)
+        for A in sm.A
+    ]
+    energy = sum(sm.ρ[i] * sm.E[i] for i in idx_groundstate)
+    partition = sum(sm.ρ[i] for i in idx_groundstate)
+    return (partition=partition, energy=energy, observables=observables)
 end
