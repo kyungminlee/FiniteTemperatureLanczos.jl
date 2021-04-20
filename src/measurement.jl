@@ -1,13 +1,32 @@
+#=
+
 using LinearAlgebra
 using KrylovKit
 
 export premeasurestatic
 export measure
 
-struct PremeasurementStatic{R<:Real}
-    A::Vector{Matrix}
+abstract type AbstractPremeasurement{S<:Number} end
+
+struct BasePremeasurement{R<:Real}
     ρ::Vector{R}
     E::Vector{R}
+end
+
+struct StaticObservablePremeasurement{S<:Number} <: AbstractPremeasurement{S}
+    A::Matrix{S}
+end
+
+struct StaticSusceptibilityPremeasurement{S<:Number} <: AbstractPremeasurement{S}
+    A::Array{S, 3}
+end
+
+
+function _prepare_premeasurement(factorization::KrylovKit.LanczosFactorization{T, R}) where {T, R}
+    h = SymTridiagonal(factorization.αs, factorization.βs[1:end-1])
+    e, u = eigen(h)
+    V = basis(factorization).basis
+    return (e, u, V)
 end
 
 
@@ -83,8 +102,9 @@ function measure(sm::PremeasurementStatic{R}, temperature::Real; tol::Real=Base.
         for A in sm.A
     ]
     energy = sum(half_boltzmann[i] * half_boltzmann[i] * sm.ρ[i] * sm.E[i] for i in 1:d)
+    energysquared = sum(half_boltzmann[i] * half_boltzmann[i] * sm.ρ[i] * sm.E[i]^2 for i in 1:d)
     partition = sum(half_boltzmann[i] * half_boltzmann[i] * sm.ρ[i] for i in 1:d)
-    return (partition=partition, energy=energy, observables=observables)
+    return (partition=partition, energy=energy, energysquared=energysquared, observables=observables)
 end
 
 
@@ -96,6 +116,9 @@ function measurezerotemperature(sm::PremeasurementStatic{R}; tol::Real=Base.rtol
         for A in sm.A
     ]
     energy = sum(sm.ρ[i] * sm.E[i] for i in idx_groundstate)
+    energysquared = sum(sm.ρ[i] * sm.E[i]^2 for i in idx_groundstate)
     partition = sum(sm.ρ[i] for i in idx_groundstate)
-    return (partition=partition, energy=energy, observables=observables)
+    return (partition=partition, energy=energy, energysquared=energysquared, observables=observables)
 end
+
+=#
