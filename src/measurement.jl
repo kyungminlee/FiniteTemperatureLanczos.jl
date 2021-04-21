@@ -140,10 +140,6 @@ function measure(obs::AbstractVector{<:Number}, E::AbstractVector{<:Real}, halfb
     return sum(halfboltzmann[i] * halfboltzmann[i] * obs[i] for i in 1:d)
 end
 
-
-"""
-    Measure static observable
-"""
 function measure(obs::AbstractMatrix{<:Number}, E::AbstractVector{<:Real}, halfboltzmann::AbstractVector{<:Real})
     d = length(E)
     @boundscheck let
@@ -153,11 +149,7 @@ function measure(obs::AbstractMatrix{<:Number}, E::AbstractVector{<:Real}, halfb
     return sum(halfboltzmann[i] * halfboltzmann[j] * obs[i, j] for i in 1:d for j in 1:d)
 end
 
-
-"""
-    Measure static susceptibility
-"""
-@inline function measure(obs::AbstractArray{<:Number, 3}, E::AbstractVector{<:Real}, halfboltzmann::AbstractVector{<:Real})
+function measure(obs::AbstractArray{<:Number, 3}, E::AbstractVector{<:Real}, halfboltzmann::AbstractVector{<:Real})
     d = length(E)
     @boundscheck let
         d == length(halfboltzmann) || throw(DimensionMismatch("eigenvalues has length $d, half boltzmann has length $(length(halfboltzmann))"))
