@@ -2,14 +2,18 @@ using LinearAlgebra
 using KrylovKit
 
 export AbstractPremeasurement
-export BasePremeasurement
+export Premeasurement
 
 export premeasure
 export measure
 
-abstract type AbstractPremeasurement{S<:Number} end
 
-struct BasePremeasurement{
+"""
+    Premeasurement
+
+Contains eigenvalues, eigenvectors, and basis of Krylov factorization.
+"""
+struct Premeasurement{
         S<:Number, R<:Real, B<:Number,
         MS<:AbstractMatrix{S},
         MR<:AbstractVector{R},
@@ -17,7 +21,7 @@ struct BasePremeasurement{
     }
     eigen::Eigen{S, R, MS, MR}
     basis::MB
-    function BasePremeasurement(eigen::Eigen{S, R, MS, MR}, basis::MB) where {
+    function Premeasurement(eigen::Eigen{S, R, MS, MR}, basis::MB) where {
             S<:Number, R<:Real, B<:Number,
             MS<:AbstractMatrix{S},
             MR<:AbstractVector{R},
@@ -28,9 +32,14 @@ struct BasePremeasurement{
 end
 
 
+"""
+    premeasure(factorization::KrylovKit.LanczosFactorization)
+
+Return the Premeasurement object which contains the eigen system and basis of `factorization.`
+"""
 function premeasure(factorization::KrylovKit.LanczosFactorization{T, R}) where {T, R}
     h = SymTridiagonal(factorization.αs, factorization.βs[1:end-1])
-    return BasePremeasurement(eigen(h), basis(factorization))
+    return Premeasurement(eigen(h), basis(factorization))
 end
 
 
@@ -52,13 +61,28 @@ function _project(A::AbstractMatrix, Vb::KrylovKit.OrthonormalBasis, u::Abstract
 end
 
 
-function premeasure(pm::BasePremeasurement)
-    u = pm.eigen.vectors
-    return abs2.(u[1, :])
-end
+"""
+    premeasure(pm::Premeasurement)
+
+Premeasure partition function. Return the vector elements of the partition function.
+"""
+premeasure(pm::Premeasurement) = abs2.(pm.eigen.vectors[1, :])
 
 
-function premeasure(pm::BasePremeasurement, obs::StaticObservable)
+"""
+    premeasureenergy(pm::Premeasurement)
+
+Premeasure energy. Return the vector elements of the energy.
+"""
+premeasureenergy(pm::Premeasurement) = abs2.(pm.eigen.vectors[1, :]) .* pm.eigen.values
+
+
+"""
+    premeasure(pm::Premeasurement, obs::Observable)
+
+Premeasure observable. Return the matrix elements of the observable.
+"""
+function premeasure(pm::Premeasurement, obs::Observable)
     V = pm.basis
     d = length(pm.eigen.values)
     u = pm.eigen.vectors
@@ -75,7 +99,12 @@ function premeasure(pm::BasePremeasurement, obs::StaticObservable)
 end
 
 
-function premeasure(pm::BasePremeasurement, obs::StaticSusceptibility)
+"""
+    premeasure(pm::Premeasurement, obs::Susceptibility)
+
+Premeasure static susceptibility. Return the tensor elements of susceptibility.
+"""
+function premeasure(pm::Premeasurement, obs::Susceptibility)
     V = pm.basis
     u = pm.eigen.vectors
     d = length(pm.eigen.values)
@@ -97,21 +126,17 @@ function premeasure(pm::BasePremeasurement, obs::StaticSusceptibility)
 end
 
 
-function measure(pm::BasePremeasurement, temperature::Real; tol::Real=Base.rtoldefault(R)) where {R<:Real}
-    E = pm.eigen.values
-    if abs(temperature) <= tol
-        @warn "it is recommended that you do do not use FTLM for zero temperature property" maxlog=1
-        # assume that E contains the ground state
-        halfboltzmann = (abs.(E .- minimum(E)) .<= tol)
-    else
-        # halfboltzmann = exp.( -(0.5/temperature) .* (E .- minimum(E)) )
-        halfboltzmann = exp.( -(0.5/temperature) .* E )
-    end
-    return measure(pm, halfboltzmann)
-end
+"""
+    measure(obs, E, temperature)
 
+Measure observable.
 
-@inline function measure(obs::AbstractArray, E::AbstractVector{R}, temperature::Real; tol::Real=Base.rtoldefault(R)) where {R}
+# Arguments
+- `obs`: tensor elements
+- `E`: Ritz eigenvalues
+- `temperature`: temperature
+"""
+function measure(obs::AbstractArray, E::AbstractVector{R}, temperature::Real; tol::Real=Base.rtoldefault(R)) where {R}
     @boundscheck let
         d = length(E)
         size(obs, 1) == d || throw(DimensionMismatch("$(size(obs)), $d"))
@@ -129,7 +154,14 @@ end
 
 
 """
-    Measure partition function
+    measure(obs, E, halfboltzmann)
+
+Measure diagonal observable, including partition function and energy.
+
+# Arguments
+- `obs`: tensor elements. A tensor of rank 1, 2, or 3 supported.
+- `E`: Ritz eigenvalues
+- `halfboltzmann`: exp(-E/2T)
 """
 function measure(obs::AbstractVector{<:Number}, E::AbstractVector{<:Real}, halfboltzmann::AbstractVector{<:Real})
     d = length(E)
