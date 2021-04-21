@@ -1,5 +1,6 @@
 module FiniteTemperatureLanczos
 
-include("static.jl")
+include("observable.jl")
+include("measurement.jl")
 
 end # module
