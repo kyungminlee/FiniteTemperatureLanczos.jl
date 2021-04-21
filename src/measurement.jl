@@ -5,6 +5,7 @@ export AbstractPremeasurement
 export Premeasurement
 
 export premeasure
+export premeasureenergy
 export measure
 
 
@@ -68,13 +69,15 @@ Premeasure partition function. Return the vector elements of the partition funct
 """
 premeasure(pm::Premeasurement) = abs2.(pm.eigen.vectors[1, :])
 
+premeasure(pm::Premeasurement, pow::Integer) = abs2.(pm.eigen.vectors[1, :])  .* pm.eigen.values.^pow
+
 
 """
     premeasureenergy(pm::Premeasurement)
 
 Premeasure energy. Return the vector elements of the energy.
 """
-premeasureenergy(pm::Premeasurement) = abs2.(pm.eigen.vectors[1, :]) .* pm.eigen.values
+premeasureenergy(pm::Premeasurement, pow::Integer=1) = abs2.(pm.eigen.vectors[1, :]) .* pm.eigen.values.^pow
 
 
 """
