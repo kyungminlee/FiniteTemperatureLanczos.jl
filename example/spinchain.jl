@@ -56,7 +56,7 @@ function main()
     # global Eavgs_true = [    minimum(eigvals(Hermitian(h)))    ]
     # append!(Eavgs_true, tr(h * exp(-Hermitian(h ./ t))) / tr(exp(-Hermitian(h ./ t)))  for t in temperatures[2:end])
     # plot(temperatures, Eavgs, label="FTLM")
-    plot(temperatures, (E2avgs - Eavgs.^2) ./ temperatures.^2 ./ n, label="FTLM", xlims=(0, 2))
+    plot(temperatures, (E2avgs - Eavgs.^2) ./ temperatures.^2 ./ 8, label="FTLM", xlims=(0, 2))
     # plot!(temperatures, Eavgs_true, label="Direct")
     # return Eavgs
 end

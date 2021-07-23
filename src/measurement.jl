@@ -46,8 +46,8 @@ end
 
 # aij = ( u ⋅ V† ⋅ A ⋅ V ⋅ u† )
 function _project(A::AbstractMatrix, Vb::KrylovKit.OrthonormalBasis, u::AbstractMatrix)
-    d = size(A, 1)
     V = Vb.basis
+    d = length(V)
     a1 = A * V[1]
     Q = promote_type(eltype(a1), eltype(u))
     apq = zeros(Q, (d, d))
