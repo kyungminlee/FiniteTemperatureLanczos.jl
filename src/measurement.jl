@@ -45,18 +45,56 @@ end
 
 
 # aij = ( u ⋅ V† ⋅ A ⋅ V ⋅ u† )
+# 2021/07/30. Above comment wrong? Is aij = ( u† ⋅ V† ⋅ A ⋅ V ⋅ u ) ?
+# Hamiltonian:
+#   h = V† H V = u e u†   (s.t. H = V h V† within Krylov space)
+# Observable:
+#   a = V† A V = u ae u†   => ae = u† V† A V u
 function _project(A::AbstractMatrix, Vb::KrylovKit.OrthonormalBasis, u::AbstractMatrix)
     V = Vb.basis
+    Q = promote_type(eltype(A), eltype(V[1]), eltype(u))
     d = length(V)
-    a1 = A * V[1]
-    Q = promote_type(eltype(a1), eltype(u))
+    D = length(V[1])
     apq = zeros(Q, (d, d))
+    aq = Vector{Q}(undef, D)
     for q in 1:d
-        aq = A * V[q]
+        LinearAlgebra.mul!(aq, A, V[q])
         for p in 1:d
             apq[p, q] = dot(V[p], aq)
         end
     end
+    aij = adjoint(u) * apq * u
+    return aij
+end
+
+
+using QuantumHamiltonian
+# Computing elements of the operator representation is more costly than accessing elements of the vector.
+# The gain from vectorization is smaller than the loss due to duplicate applications of the operator representation.
+function _project(A::AbstractOperatorRepresentation, Vb::KrylovKit.OrthonormalBasis, u::AbstractMatrix)
+    V = Vb.basis
+    d = length(V)
+    D = length(V[1])
+    Q = promote_type(eltype(A), eltype(V[1]), eltype(u))
+    apq = zeros(Q, (d, d))
+    
+    let nt = Threads.nthreads(),
+        local_apq = [zeros(Q, (d,d)) for it in 1:nt]
+        Threads.@threads for i in 1:D
+            it = Threads.threadid()
+            for (j, v) in QuantumHamiltonian.get_row_iterator(A, i)
+                if 0 < j <= D
+                    for p in 1:d, q in 1:d
+                        local_apq[it][p, q] += conj(V[p][i]) * v * V[q][j]
+                    end
+                end
+            end
+        end
+        for it in 1:nt
+            apq += local_apq[it]
+        end
+    end
+    GC.gc()
     aij = adjoint(u) * apq * u
     return aij
 end
@@ -181,7 +219,10 @@ function measure(obs::AbstractMatrix{<:Number}, E::AbstractVector{<:Real}, halfb
         d == length(halfboltzmann) || throw(DimensionMismatch("eigenvalues has length $d, half boltzmann has length $(length(halfboltzmann))"))
         size(obs) == (d, d) || throw(DimensionMismatch("eigenvalues has length $d, observable has size $(size(obs))"))
     end
-    return sum(halfboltzmann[i] * halfboltzmann[j] * obs[i, j] for i in 1:d for j in 1:d)
+    # @show E
+    # @show halfboltzmann
+    # @show obs
+    return sum(halfboltzmann[i] * halfboltzmann[j] * obs[i, j] for i in 1:d for j in 1:d) # TODO: HERE!
 end
 
 function measure(obs::AbstractArray{<:Number, 3}, E::AbstractVector{<:Real}, halfboltzmann::AbstractVector{<:Real})
