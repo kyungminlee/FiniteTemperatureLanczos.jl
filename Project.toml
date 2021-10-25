@@ -1,7 +1,7 @@
 name = "FiniteTemperatureLanczos"
 uuid = "3017c631-05ab-49d4-ba00-44a31b8d5f6d"
 authors = ["Kyungmin Lee <kyungmin.lee.42@gmail.com>"]
-version = "0.1.1"
+version = "0.1.2"
 
 [deps]
 KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
@@ -12,6 +12,8 @@ julia = "1"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+QuantumHamiltonian = "ca2024c7-d5ca-47dc-aafc-db87cbdab76e"
 
 [targets]
-test = ["Test"]
+test = ["Test", "Random", "QuantumHamiltonian"]
