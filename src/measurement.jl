@@ -94,7 +94,6 @@ function _project(A::AbstractOperatorRepresentation, Vb::KrylovKit.OrthonormalBa
             apq += local_apq[it]
         end
     end
-    GC.gc()
     aij = adjoint(u) * apq * u
     return aij
 end
@@ -105,9 +104,9 @@ end
 
 Premeasure partition function. Return the vector elements of the partition function.
 """
-premeasure(pm::Premeasurement) = abs2.(pm.eigen.vectors[1, :])
+premeasure(pm::Premeasurement) = abs2.(view(pm.eigen.vectors, 1, :))
 
-premeasure(pm::Premeasurement, pow::Integer) = abs2.(pm.eigen.vectors[1, :])  .* pm.eigen.values.^pow
+premeasure(pm::Premeasurement, pow::Integer) = abs2.(view(pm.eigen.vectors, 1, :)) .* pm.eigen.values.^pow
 
 
 """
@@ -115,7 +114,7 @@ premeasure(pm::Premeasurement, pow::Integer) = abs2.(pm.eigen.vectors[1, :])  .*
 
 Premeasure energy. Return the vector elements of the energy.
 """
-premeasureenergy(pm::Premeasurement, pow::Integer=1) = abs2.(pm.eigen.vectors[1, :]) .* pm.eigen.values.^pow
+premeasureenergy(pm::Premeasurement, pow::Integer=1) = abs2.(view(pm.eigen.vectors, 1, :)) .* pm.eigen.values.^pow
 
 
 """
@@ -131,10 +130,10 @@ function premeasure(pm::Premeasurement, obs::Observable)
 
     aij = _project(A, V, u)
     for i in 1:d
-        aij[i, :] .*= u[1, i]
+        view(aij, i, :) .*= u[1, i]
     end
     for j in 1:d
-        aij[:, j] .*= conj(u[1, j])
+        view(aij, :, j) .*= conj(u[1, j])
     end
     return aij
 end
@@ -155,8 +154,8 @@ function premeasure(pm::Premeasurement, obs::Susceptibility)
     aij = _project(A, V, u)
     bjk = _project(B, V, u)
     for i in 1:d
-        aij[i, :] .*= u[1, i]
-        bjk[:, i] .*= conj(u[1, i])
+        view(aij, i, :) .*= u[1, i]
+        view(bjk, :, i) .*= conj(u[1, i])
     end
     Q = promote_type(eltype(aij), eltype(bjk))
     m = zeros(Q, (d, d, d))
@@ -204,36 +203,51 @@ Measure diagonal observable, including partition function and energy.
 - `E`: Ritz eigenvalues
 - `halfboltzmann`: exp(-E/2T)
 """
-function measure(obs::AbstractVector{<:Number}, E::AbstractVector{<:Real}, halfboltzmann::AbstractVector{<:Real})
+function measure(obs::AbstractVector{S1}, E::AbstractVector{S2}, halfboltzmann::AbstractVector{S3}) where {S1<:Number, S2<:Real, S3<:Real}
     d = length(E)
     @boundscheck let
         d == length(halfboltzmann) || throw(DimensionMismatch("eigenvalues has length $d, half boltzmann has length $(length(halfboltzmann))"))
         size(obs) == (d,) || throw(DimensionMismatch("eigenvalues has length $d, observable has size $(size(obs))"))
     end
+    out = zero(promote_type(S1, S2, S3))
+    for i in 1:d
+        out += halfboltzmann[i] * halfboltzmann[i] * obs[i]
+    end
+    return out
+    # return mapreduce(x->x[1]*x[2]*x[3], +, zip(halfboltzmann, halfboltzmann, obs))
     return sum(halfboltzmann[i] * halfboltzmann[i] * obs[i] for i in 1:d)
 end
 
-function measure(obs::AbstractMatrix{<:Number}, E::AbstractVector{<:Real}, halfboltzmann::AbstractVector{<:Real})
+function measure(obs::AbstractMatrix{S1}, E::AbstractVector{S2}, halfboltzmann::AbstractVector{S3}) where {S1<:Number, S2<:Real, S3<:Real}
     d = length(E)
     @boundscheck let
         d == length(halfboltzmann) || throw(DimensionMismatch("eigenvalues has length $d, half boltzmann has length $(length(halfboltzmann))"))
         size(obs) == (d, d) || throw(DimensionMismatch("eigenvalues has length $d, observable has size $(size(obs))"))
     end
-    # @show E
-    # @show halfboltzmann
-    # @show obs
-    return sum(halfboltzmann[i] * halfboltzmann[j] * obs[i, j] for i in 1:d for j in 1:d) # TODO: HERE!
+    out = zero(promote_type(S1, S2, S3))
+    for i in 1:d, j in 1:d
+        out += halfboltzmann[i] * obs[i, j] * halfboltzmann[j]
+    end
+    return out
+    # return sum(halfboltzmann[i] * halfboltzmann[j] * obs[i, j] for i in 1:d for j in 1:d) # TODO: HERE!
+    # return dot(halfboltzmann, obs * halfboltzmann)
+    # return mapreduce(x->x[1]*x[2]*x[3], +, zip(halfboltzmann, halfboltzmann, obs))
 end
 
-function measure(obs::AbstractArray{<:Number, 3}, E::AbstractVector{<:Real}, halfboltzmann::AbstractVector{<:Real})
+function measure(obs::AbstractArray{S1, 3}, E::AbstractVector{S2}, halfboltzmann::AbstractVector{S3}) where {S1<:Number, S2<:Real, S3<:Real}
     d = length(E)
     @boundscheck let
         d == length(halfboltzmann) || throw(DimensionMismatch("eigenvalues has length $d, half boltzmann has length $(length(halfboltzmann))"))
         size(obs) == (d, d, d) || throw(DimensionMismatch("eigenvalues has length $d, observable has size $(size(obs))"))
     end
     B = halfboltzmann
-    return sum(
-        obs[i, j, k] * (B[i] * B[k] - B[j] * B[j]) / (E[j] - 0.5 * (E[i] + E[k]))
-        for i in 1:d for j in 1:d for k in 1:d
-    )
+    out = zero(promote_type(S1, S2, S3))
+    for i in 1:d, j in 1:d, k in 1:d
+        out += obs[i, j, k] * (B[i] * B[k] - B[j] * B[j]) / (E[j] - 0.5 * (E[i] + E[k]))
+    end
+    return out
+    # return sum(
+    #     obs[i, j, k] * (B[i] * B[k] - B[j] * B[j]) / (E[j] - 0.5 * (E[i] + E[k]))
+    #     for i in 1:d for j in 1:d for k in 1:d
+    # )
 end
