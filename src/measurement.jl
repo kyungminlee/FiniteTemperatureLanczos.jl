@@ -55,7 +55,7 @@ function _project(A::AbstractMatrix, Vb::KrylovKit.OrthonormalBasis, u::Abstract
     Q = promote_type(eltype(A), eltype(V[1]), eltype(u))
     d = length(V)
     D = length(V[1])
-    apq = zeros(Q, (d, d))
+    apq = Matrix{Q}(undef, (d, d))
     aq = Vector{Q}(undef, D)
     for q in 1:d
         LinearAlgebra.mul!(aq, A, V[q])
@@ -67,37 +67,43 @@ function _project(A::AbstractMatrix, Vb::KrylovKit.OrthonormalBasis, u::Abstract
     return aij
 end
 
-
+#=
 using QuantumHamiltonian
 # Computing elements of the operator representation is more costly than accessing elements of the vector.
 # The gain from vectorization is smaller than the loss due to duplicate applications of the operator representation.
+# => This is what I thought, but it actually runs slower than the naive version.
 function _project(A::AbstractOperatorRepresentation, Vb::KrylovKit.OrthonormalBasis, u::AbstractMatrix)
     V = Vb.basis
     d = length(V)
     D = length(V[1])
     Q = promote_type(eltype(A), eltype(V[1]), eltype(u))
     apq = zeros(Q, (d, d))
-    
-    let nt = Threads.nthreads(),
-        local_apq = [zeros(Q, (d,d)) for it in 1:nt]
+    let nt = Threads.nthreads()
+        local_apq_list = zeros(Q, (nt, d, d))
         Threads.@threads for i in 1:D
-            it = Threads.threadid()
+        #for i in 1:D
+                it = Threads.threadid()
             for (j, v) in QuantumHamiltonian.get_row_iterator(A, i)
                 if 0 < j <= D
-                    for p in 1:d, q in 1:d
-                        local_apq[it][p, q] += conj(V[p][i]) * v * V[q][j]
+                    for p in 1:d
+                        Vpi_v = conj(V[p][i]) * v
+                        for q in 1:d
+                            local_apq_list[it, p, q] += Vpi_v * V[q][j]
+                            # apq[p, q] += Vpi_v * V[q][j]
+                            # local_apq_list[it, p, q] += conj(V[p][i]) * v * V[q][j]
+                        end
                     end
                 end
             end
         end
-        for it in 1:nt
-            apq += local_apq[it]
-        end
+        # for it in 1:nt
+        #     apq += local_apq_list[it, :, :]
+        # end
     end
     aij = adjoint(u) * apq * u
     return aij
 end
-
+=#
 
 """
     premeasure(pm::Premeasurement)
