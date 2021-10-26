@@ -28,6 +28,13 @@ struct Premeasurement{
             MR<:AbstractVector{R},
             MB<:KrylovKit.OrthonormalBasis{<:AbstractVector{B}}
         }
+        d = length(eigen.values)
+        iszero(d) && throw(ArgumentError("Number of eigenvalues cannot be zero"))
+        size(eigen.vectors, 1) == d || throw(ArgumentError("number of eigenvalues $d does not match the size of eigenvectors $(size(eigen.vectors, 1))"))
+        size(eigen.vectors, 2) == d || throw(ArgumentError("number of eigenvalues $d does not match the number of eigenvectors $(size(eigen.vectors, 2))"))
+        length(basis) == d || throw(ArgumentError("number of basis states $(length(basis)) does not match the size of eigenvectors $d"))
+        D = length(first(basis))
+        D >= d || throw(ArgumentError("size of basis vectors cannot be smaller than the number of eigenvalues"))
         return new{S, R, B, MS, MR, MB}(eigen, basis)
     end
 end
@@ -50,18 +57,50 @@ end
 #   h = V† H V = u e u†   (s.t. H = V h V† within Krylov space)
 # Observable:
 #   a = V† A V = u ae u†   => ae = u† V† A V u
-function _project(A::AbstractMatrix, Vb::KrylovKit.OrthonormalBasis, u::AbstractMatrix)
+function _project(
+    A::AbstractMatrix{S1},                                # (D, D)
+    Vb::KrylovKit.OrthonormalBasis{<:AbstractVector{S2}}, # (D, d). d of vectors of length D
+    u::AbstractMatrix{S3}                                 # (d, d)
+) where {S1<:Number, S2<:Number, S3<:Number}
+    Q = promote_type(S1, S2, S3)
     V = Vb.basis
-    Q = promote_type(eltype(A), eltype(V[1]), eltype(u))
-    d = length(V)
-    D = length(V[1])
+    d, D = length(V), length(first(V))
+    @boundscheck size(A) == (D, D) || throw(DimensionMismatch("$(size(A)), $D"))
+    @boundscheck size(u) == (d, d) || throw(DimensionMismatch("$(size(u)), $d"))
     apq = Matrix{Q}(undef, (d, d))
     aq = Vector{Q}(undef, D)
     for q in 1:d
-        LinearAlgebra.mul!(aq, A, V[q])
+        @inbounds LinearAlgebra.mul!(aq, A, V[q])
         for p in 1:d
-            apq[p, q] = dot(V[p], aq)
+            @inbounds apq[p, q] = dot(V[p], aq)
         end
+    end
+    aij = adjoint(u) * apq * u
+    return aij
+end
+
+# For Hermitian matrix A, ⟨u|A|v⟩ = ⟨v|A|u⟩*
+# The resulting projected matrix should also be Hermitian, BUT NOT OF TYPE Hermitian.
+function _project(
+    A::Hermitian{S1, <:AbstractMatrix{S1}},               # (D, D)
+    Vb::KrylovKit.OrthonormalBasis{<:AbstractVector{S2}}, # (D, d)
+    u::AbstractMatrix{S3}                                 # (d, d)
+) where {S1<:Number, S2<:Number, S3<:Number}
+    Q = promote_type(S1, S2, S3)
+    V = Vb.basis
+    d, D = length(V), length(first(V))
+    @boundscheck size(A) == (D, D) || throw(DimensionMismatch("$(size(A)), $D"))
+    @boundscheck size(u) == (d, d) || throw(DimensionMismatch("$(size(u)), $d"))
+    apq = Matrix{Q}(undef, (d, d))
+    aq = Vector{Q}(undef, D)
+    for q in 1:d
+        @inbounds LinearAlgebra.mul!(aq, A, V[q])
+        for p in 1:q-1
+            @inbounds val = dot(V[p], aq)
+            @inbounds apq[p, q] = val
+            @inbounds apq[q, p] = conj(val)
+        end
+        @inbounds apq[q, q] = dot(V[q], aq)
     end
     aij = adjoint(u) * apq * u
     return aij
@@ -112,16 +151,16 @@ Premeasure partition function. Return the vector elements of the partition funct
 """
 premeasure(pm::Premeasurement) = abs2.(view(pm.eigen.vectors, 1, :))
 
-premeasure(pm::Premeasurement, pow::Integer) = abs2.(view(pm.eigen.vectors, 1, :)) .* pm.eigen.values.^pow
-
+premeasure(pm::Premeasurement, pow::Integer) = map((x,y) -> abs2(x) * y^pow, view(pm.eigen.vectors, 1, :), pm.eigen.values)
+# premeasure(pm::Premeasurement, pow::Integer) = abs2.(view(pm.eigen.vectors, 1, :)) .* pm.eigen.values.^pow
 
 """
     premeasureenergy(pm::Premeasurement)
 
 Premeasure energy. Return the vector elements of the energy.
 """
-premeasureenergy(pm::Premeasurement, pow::Integer=1) = abs2.(view(pm.eigen.vectors, 1, :)) .* pm.eigen.values.^pow
-
+premeasureenergy(pm::Premeasurement, pow::Integer=1) = map((x,y) -> abs2(x) * y^pow, view(pm.eigen.vectors, 1, :), pm.eigen.values)
+# premeasureenergy(pm::Premeasurement, pow::Integer=1) = abs2.(view(pm.eigen.vectors, 1, :)) .* pm.eigen.values.^pow
 
 """
     premeasure(pm::Premeasurement, obs::Observable)
@@ -133,17 +172,14 @@ function premeasure(pm::Premeasurement, obs::Observable)
     d = length(pm.eigen.values)
     u = pm.eigen.vectors
     A = obs.observable
-
     aij = _project(A, V, u)
+    @assert size(aij) == (d,d)
     for i in 1:d
-        view(aij, i, :) .*= u[1, i]
-    end
-    for j in 1:d
-        view(aij, :, j) .*= conj(u[1, j])
+        @inbounds view(aij, i, :) .*= u[1, i]
+        @inbounds view(aij, :, i) .*= conj(u[1, i])
     end
     return aij
 end
-
 
 """
     premeasure(pm::Premeasurement, obs::Susceptibility)
@@ -198,7 +234,6 @@ function measure(obs::AbstractArray, E::AbstractVector{R}, temperature::Real; to
     return measure(obs, E, halfboltzmann)
 end
 
-
 """
     measure(obs, E, halfboltzmann)
 
@@ -217,11 +252,11 @@ function measure(obs::AbstractVector{S1}, E::AbstractVector{S2}, halfboltzmann::
     end
     out = zero(promote_type(S1, S2, S3))
     for i in 1:d
-        out += halfboltzmann[i] * halfboltzmann[i] * obs[i]
+        @inbounds out += halfboltzmann[i] * halfboltzmann[i] * obs[i]
     end
     return out
     # return mapreduce(x->x[1]*x[2]*x[3], +, zip(halfboltzmann, halfboltzmann, obs))
-    return sum(halfboltzmann[i] * halfboltzmann[i] * obs[i] for i in 1:d)
+    # return sum(halfboltzmann[i] * halfboltzmann[i] * obs[i] for i in 1:d)
 end
 
 function measure(obs::AbstractMatrix{S1}, E::AbstractVector{S2}, halfboltzmann::AbstractVector{S3}) where {S1<:Number, S2<:Real, S3<:Real}
@@ -232,7 +267,7 @@ function measure(obs::AbstractMatrix{S1}, E::AbstractVector{S2}, halfboltzmann::
     end
     out = zero(promote_type(S1, S2, S3))
     for i in 1:d, j in 1:d
-        out += halfboltzmann[i] * obs[i, j] * halfboltzmann[j]
+        @inbounds out += halfboltzmann[i] * obs[i, j] * halfboltzmann[j]
     end
     return out
     # return sum(halfboltzmann[i] * halfboltzmann[j] * obs[i, j] for i in 1:d for j in 1:d) # TODO: HERE!
@@ -249,7 +284,7 @@ function measure(obs::AbstractArray{S1, 3}, E::AbstractVector{S2}, halfboltzmann
     B = halfboltzmann
     out = zero(promote_type(S1, S2, S3))
     for i in 1:d, j in 1:d, k in 1:d
-        out += obs[i, j, k] * (B[i] * B[k] - B[j] * B[j]) / (E[j] - 0.5 * (E[i] + E[k]))
+        @inbounds out += obs[i, j, k] * (B[i] * B[k] - B[j] * B[j]) / (E[j] - 0.5 * (E[i] + E[k]))
     end
     return out
     # return sum(
