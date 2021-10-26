@@ -16,6 +16,12 @@ using LinearAlgebra
         @test size(obs) == (2,2)
         @test size(obs, 1) == 2
     end
+    # Hermitian
+    let obs = Observable(Hermitian([1.0 0.1im; -0.1im 2.0]))
+        @test eltype(obs) == ComplexF64
+        @test size(obs) == (2,2)
+        @test size(obs, 1) == 2
+    end
     @test_throws DimensionMismatch Observable([1 2; 3 4; 5 6])
 end
 
@@ -41,6 +47,10 @@ end
     σx = [0 1; 1 0]
     σy = [0 -im; im 0]
     σz = [1 0; 0 -1]
+    Hσx = Hermitian(σx)
+    Hσy = Hermitian(σy)
+    Hσz = Hermitian(σz)
+    
     H = -σz
     temperatures = [0.1, 0.5, 1.0]
     obs_z = zeros(Float64, length(temperatures))
@@ -50,6 +60,9 @@ end
     obs_σz = zeros(ComplexF64, length(temperatures))
     obs_σx = zeros(ComplexF64, length(temperatures))
     obs_σy = zeros(ComplexF64, length(temperatures))
+    obs_Hσz = zeros(ComplexF64, length(temperatures))
+    obs_Hσx = zeros(ComplexF64, length(temperatures))
+    obs_Hσy = zeros(ComplexF64, length(temperatures))
 
     R = 10000
     rng = Random.MersenneTwister(1)
@@ -65,6 +78,9 @@ end
         pre_σx = premeasure(pm, Observable(σx))
         pre_σy = premeasure(pm, Observable(σy))
         pre_σz = premeasure(pm, Observable(σz))
+        pre_Hσx = premeasure(pm, Observable(Hσx))
+        pre_Hσy = premeasure(pm, Observable(Hσy))
+        pre_Hσz = premeasure(pm, Observable(Hσz))
         for (iT, T) in enumerate(temperatures)
             # @show T
             obs_z[iT]  += measure(pre_z, pm.eigen.values, T)
@@ -74,6 +90,9 @@ end
             obs_σx[iT] += measure(pre_σx, pm.eigen.values, T)
             obs_σy[iT] += measure(pre_σy, pm.eigen.values, T)
             obs_σz[iT] += measure(pre_σz, pm.eigen.values, T)
+            obs_Hσx[iT] += measure(pre_Hσx, pm.eigen.values, T)
+            obs_Hσy[iT] += measure(pre_Hσy, pm.eigen.values, T)
+            obs_Hσz[iT] += measure(pre_Hσz, pm.eigen.values, T)
         end
     end
     @test obs_zp == obs_z
@@ -81,6 +100,9 @@ end
     meas_σx = obs_σx ./ obs_z
     meas_σy = obs_σy ./ obs_z
     meas_σz = obs_σz ./ obs_z
+    meas_Hσx = obs_Hσx ./ obs_z
+    meas_Hσy = obs_Hσy ./ obs_z
+    meas_Hσz = obs_Hσz ./ obs_z
     meas_E  = obs_E ./ obs_z
     meas_Cv = ((obs_E2./obs_z) - (obs_E./obs_z).^2) ./ temperatures.^2
 
@@ -100,6 +122,9 @@ end
     @test isapprox(true_σx, meas_σx; atol=1E-2)
     @test isapprox(true_σy, meas_σy; atol=1E-2)
     @test isapprox(true_σz, meas_σz; rtol=1E-2)
+    @test isapprox(true_σx, meas_Hσx; atol=1E-2)
+    @test isapprox(true_σy, meas_Hσy; atol=1E-2)
+    @test isapprox(true_σz, meas_Hσz; rtol=1E-2)
     @test isapprox(true_E, meas_E; rtol=1E-2)
     @test isapprox(true_Cv, meas_Cv; rtol=1E-2, atol=1E-2, nans=true)
 end
