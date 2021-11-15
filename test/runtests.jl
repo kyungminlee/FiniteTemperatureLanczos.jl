@@ -70,17 +70,23 @@ end
         iterator = LanczosIterator(H, randn(rng, ComplexF64, 2))
         factorization = initialize(iterator)
         expand!(iterator, factorization) # single expansion since D = 2
+
         pm = premeasure(factorization)
+        d = length(pm.basis)
+        D = length(first(pm.basis))
+
         pre_z = premeasure(pm)
         pre_zp = premeasure(pm, 0)
         pre_E = premeasure(pm, 1)
         pre_E2 = premeasure(pm, 2)
-        pre_σx = premeasure(pm, Observable(σx))
-        pre_σy = premeasure(pm, Observable(σy))
-        pre_σz = premeasure(pm, Observable(σz))
-        pre_Hσx = premeasure(pm, Observable(Hσx))
-        pre_Hσy = premeasure(pm, Observable(Hσy))
-        pre_Hσz = premeasure(pm, Observable(Hσz))
+
+        memspace = ObservableMemspace(ComplexF64, d, D)
+        pre_σx = premeasure(pm, Observable(σx), memspace)
+        pre_σy = premeasure(pm, Observable(σy), memspace)
+        pre_σz = premeasure(pm, Observable(σz), memspace)
+        pre_Hσx = premeasure(pm, Observable(Hσx), memspace)
+        pre_Hσy = premeasure(pm, Observable(Hσy), memspace)
+        pre_Hσz = premeasure(pm, Observable(Hσz), memspace)
         for (iT, T) in enumerate(temperatures)
             # @show T
             obs_z[iT]  += measure(pre_z, pm.eigen.values, T)
@@ -170,12 +176,15 @@ end
     @test all(isapprox.(pm1.basis, pm2.basis))
     @test isapprox(pm1.eigen.values, pm2.eigen.values)
 
+    om1 = ObservableMemspace(pm1)
+    om2 = ObservableMemspace(pm2)
+
     pre_z1 = premeasure(pm1)
     pre_z2 = premeasure(pm2)
     pre_E1 = premeasure(pm1, 1)
     pre_E2 = premeasure(pm2, 1)
-    pre_sc1 = premeasure(pm1, Observable(spin_corr_rep))
-    pre_sc2 = premeasure(pm2, Observable(spin_corr_mat))
+    pre_sc1 = premeasure(pm1, Observable(spin_corr_rep), om1)
+    pre_sc2 = premeasure(pm2, Observable(spin_corr_mat), om2)
     for (iT, T) in enumerate(temperatures)
         # @show T
         obs_z1[iT]  += measure(pre_z1, pm1.eigen.values, T)
