@@ -3,6 +3,8 @@ using KrylovKit
 
 export AbstractPremeasurement
 export Premeasurement
+export ObservableMemspace
+export SusceptibilityMemspace
 
 export premeasure
 export premeasureenergy
@@ -51,58 +53,97 @@ function premeasure(factorization::KrylovKit.LanczosFactorization{T, R}) where {
 end
 
 
+struct ObservableMemspace{Q<:Number}
+    matrix::Matrix{Q}
+    vector::Vector{Q}
+    function ObservableMemspace(::Type{Q}, d::Integer, D::Integer) where {Q<:Number}
+        return new{Q}(Matrix{Q}(undef, (d,d)), Vector{Q}(undef, D))
+    end
+    function ObservableMemspace(pm::Premeasurement{S, R, B}) where {S, R, B}
+        Q = promote_type(S, R, B)
+        d = length(pm.basis)
+        D = length(first(pm.basis))
+        return new{Q}(Matrix{Q}(undef, (d,d)), Vector{Q}(undef, D))
+    end
+end
+
+struct SusceptibilityMemspace{Q<:Number}
+    matrix1::Matrix{Q}
+    matrix2::Matrix{Q}
+    function SusceptibilityMemspace(pm::Premeasurement{S, R, B}) where {S, R, B}
+        Q = promote_type(S, R, B)
+        d = length(pm.basis)
+        return new{Q}(Matrix{Q}(undef, (d, d)), Matrix{Q}(undef, (d, d)))
+    end
+    function SusceptibilityMemspace(::Type{Q}, d::Integer) where {Q<:Number}
+        return new{Q}(Matrix{Q}(undef, (d, d)), Matrix{Q}(undef, (d, d)))
+    end
+end
+
+
 # aij = ( u ⋅ V† ⋅ A ⋅ V ⋅ u† )
 # 2021/07/30. Above comment wrong? Is aij = ( u† ⋅ V† ⋅ A ⋅ V ⋅ u ) ?
 # Hamiltonian:
 #   h = V† H V = u e u†   (s.t. H = V h V† within Krylov space)
 # Observable:
 #   a = V† A V = u ae u†   => ae = u† V† A V u
-function _project(
+function _project!(
+    aij::AbstractMatrix{Q},
     A::AbstractMatrix{S1},                                # (D, D)
     Vb::KrylovKit.OrthonormalBasis{<:AbstractVector{S2}}, # (D, d). d of vectors of length D
-    u::AbstractMatrix{S3}                                 # (d, d)
-) where {S1<:Number, S2<:Number, S3<:Number}
-    Q = promote_type(S1, S2, S3)
+    u::AbstractMatrix{S3},                                # (d, d)
+    memspace::ObservableMemspace{Q},
+) where {Q<:Number, S1<:Number, S2<:Number, S3<:Number}
     V = Vb.basis
     d, D = length(V), length(first(V))
-    @boundscheck size(A) == (D, D) || throw(DimensionMismatch("$(size(A)), $D"))
-    @boundscheck size(u) == (d, d) || throw(DimensionMismatch("$(size(u)), $d"))
-    apq = Matrix{Q}(undef, (d, d))
-    aq = Vector{Q}(undef, D)
+    apq = memspace.matrix
+    aq = memspace.vector
+    @boundscheck size(A)   == (D, D) || throw(DimensionMismatch("$(size(A)), $D"))
+    @boundscheck size(u)   == (d, d) || throw(DimensionMismatch("$(size(u)), $d"))
+    @boundscheck size(aij) == (d, d) || throw(DimensionMismatch("$(size(aij)), $d"))
+    @boundscheck size(apq) == (d, d) || throw(DimensionMismatch("$(size(apq)), $d"))
+    @boundscheck size(aq)  == (D,)   || throw(DimensionMismatch("$(size(aq)), $D"))
     for q in 1:d
         @inbounds LinearAlgebra.mul!(aq, A, V[q])
         for p in 1:d
-            @inbounds apq[p, q] = dot(V[p], aq)
+            @inbounds aij[p, q] = dot(V[p], aq)
         end
     end
-    aij = adjoint(u) * apq * u
+    mul!(apq, adjoint(u), aij)
+    mul!(aij, apq, u)
     return aij
 end
 
+
 # For Hermitian matrix A, ⟨u|A|v⟩ = ⟨v|A|u⟩*
 # The resulting projected matrix should also be Hermitian, BUT NOT OF TYPE Hermitian.
-function _project(
+function _project!(
+    aij::AbstractMatrix{Q},
     A::Hermitian{S1, <:AbstractMatrix{S1}},               # (D, D)
     Vb::KrylovKit.OrthonormalBasis{<:AbstractVector{S2}}, # (D, d)
-    u::AbstractMatrix{S3}                                 # (d, d)
-) where {S1<:Number, S2<:Number, S3<:Number}
-    Q = promote_type(S1, S2, S3)
+    u::AbstractMatrix{S3},                                # (d, d)
+    memspace::ObservableMemspace{Q},
+) where {Q<:Number, S1<:Number, S2<:Number, S3<:Number}
     V = Vb.basis
     d, D = length(V), length(first(V))
+    apq = memspace.matrix
+    aq = memspace.vector
     @boundscheck size(A) == (D, D) || throw(DimensionMismatch("$(size(A)), $D"))
     @boundscheck size(u) == (d, d) || throw(DimensionMismatch("$(size(u)), $d"))
-    apq = Matrix{Q}(undef, (d, d))
-    aq = Vector{Q}(undef, D)
+    @boundscheck size(aij) == (d, d) || throw(DimensionMismatch("$(size(aij)), $d"))
+    @boundscheck size(apq) == (d, d) || throw(DimensionMismatch("$(size(apq)), $d"))
+    @boundscheck size(aq) == (D,) || throw(DimensionMismatch("$(size(aq)), $D"))
     for q in 1:d
         @inbounds LinearAlgebra.mul!(aq, A, V[q])
         for p in 1:q-1
             @inbounds val = dot(V[p], aq)
-            @inbounds apq[p, q] = val
-            @inbounds apq[q, p] = conj(val)
+            @inbounds aij[p, q] = val
+            @inbounds aij[q, p] = conj(val)
         end
-        @inbounds apq[q, q] = dot(V[q], aq)
+        @inbounds aij[q, q] = dot(V[q], aq)
     end
-    aij = adjoint(u) * apq * u
+    mul!(apq, adjoint(u), aij)
+    mul!(aij, apq, u)
     return aij
 end
 
@@ -150,9 +191,10 @@ end
 Premeasure partition function. Return the vector elements of the partition function.
 """
 premeasure(pm::Premeasurement) = abs2.(view(pm.eigen.vectors, 1, :))
+premeasure!(out::AbstractVector, pm::Premeasurement) = map!(abs2, out, view(pm.eigen.vectors, 1, :))
 
 premeasure(pm::Premeasurement, pow::Integer) = map((x,y) -> abs2(x) * y^pow, view(pm.eigen.vectors, 1, :), pm.eigen.values)
-# premeasure(pm::Premeasurement, pow::Integer) = abs2.(view(pm.eigen.vectors, 1, :)) .* pm.eigen.values.^pow
+premeasure!(out::AbstractVector, pm::Premeasurement, pow::Integer) = map((x,y) -> abs2(x) * y^pow, out, view(pm.eigen.vectors, 1, :), pm.eigen.values)
 
 """
     premeasureenergy(pm::Premeasurement)
@@ -160,20 +202,27 @@ premeasure(pm::Premeasurement, pow::Integer) = map((x,y) -> abs2(x) * y^pow, vie
 Premeasure energy. Return the vector elements of the energy.
 """
 premeasureenergy(pm::Premeasurement, pow::Integer=1) = map((x,y) -> abs2(x) * y^pow, view(pm.eigen.vectors, 1, :), pm.eigen.values)
-# premeasureenergy(pm::Premeasurement, pow::Integer=1) = abs2.(view(pm.eigen.vectors, 1, :)) .* pm.eigen.values.^pow
+premeasureenergy!(out::AbstractVector, pm::Premeasurement, pow::Integer=1) = map((x,y) -> abs2(x) * y^pow, out, view(pm.eigen.vectors, 1, :), pm.eigen.values)
 
 """
     premeasure(pm::Premeasurement, obs::Observable)
 
 Premeasure observable. Return the matrix elements of the observable.
 """
-function premeasure(pm::Premeasurement, obs::Observable)
+function premeasure(pm::Premeasurement{S, R, B, MS, MR, MB}, obs::Observable{SO}, memspace::ObservableMemspace{M}) where {S, R, B, MS, MR, MB, SO, M}
+    Q = promote_type(S, R, B, SO, M)
+    d = length(pm.eigen.values)
+    aij = Matrix{Q}(undef, (d,d))
+    premeasure!(aij, pm, obs, memspace)
+end
+
+function premeasure!(aij::AbstractMatrix{Q}, pm::Premeasurement{S, R, B}, obs::Observable, memspace::ObservableMemspace) where {Q<:Number, S, R, B}
     V = pm.basis
     d = length(pm.eigen.values)
     u = pm.eigen.vectors
     A = obs.observable
-    aij = _project(A, V, u)
-    @assert size(aij) == (d,d)
+    @boundscheck size(aij) == (d, d) || throw(DimensionMismatch("$(size(aij)), $d"))
+    _project!(aij, A, V, u, memspace)
     for i in 1:d
         @inbounds view(aij, i, :) .*= u[1, i]
         @inbounds view(aij, :, i) .*= conj(u[1, i])
@@ -181,26 +230,37 @@ function premeasure(pm::Premeasurement, obs::Observable)
     return aij
 end
 
+
 """
     premeasure(pm::Premeasurement, obs::Susceptibility)
 
 Premeasure static susceptibility. Return the tensor elements of susceptibility.
 """
-function premeasure(pm::Premeasurement, obs::Susceptibility)
+function premeasure(pm::Premeasurement{S, R, B}, obs::Susceptibility{SS}, om::ObservableMemspace{OM}, sm::SusceptibilityMemspace{SM}) where {S, R, B, SS, OM, SM}
+    Q = promote_type(S, R, B, SS, OM, SM)
+    d = length(pm.eigen.values)
+    m = Array{Q}(undef, (d, d, d))
+    premeasure!(m, pm, obs, om, sm)
+end
+
+
+function premeasure!(m::AbstractArray{Q, 3}, pm::Premeasurement, obs::Susceptibility, om::ObservableMemspace, sm::SusceptibilityMemspace) where {Q}
     V = pm.basis
     u = pm.eigen.vectors
     d = length(pm.eigen.values)
     A = obs.observable
     B = obs.field
 
-    aij = _project(A, V, u)
-    bjk = _project(B, V, u)
+    aij = sm.matrix1
+    bjk = sm.matrix2
+
+    _project!(aij, A, V, u, om)
+    _project!(bjk, B, V, u, om)
+
     for i in 1:d
         view(aij, i, :) .*= u[1, i]
         view(bjk, :, i) .*= conj(u[1, i])
     end
-    Q = promote_type(eltype(aij), eltype(bjk))
-    m = zeros(Q, (d, d, d))
     for i in 1:d, j in 1:d, k in 1:d
         m[i, j, k] = aij[i, j] * bjk[j, k]
     end
