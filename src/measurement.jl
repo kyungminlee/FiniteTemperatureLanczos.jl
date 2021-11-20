@@ -3,11 +3,11 @@ using KrylovKit
 
 export AbstractPremeasurement
 export Premeasurement
-export ObservableMemspace
-export SusceptibilityMemspace
+# export ObservableMemspace
+# export SusceptibilityMemspace
 
-export premeasure
-export premeasureenergy
+export premeasure, premeasure!
+export premeasureenergy, premeasureenergy!
 export measure
 
 
@@ -48,36 +48,8 @@ end
 Return the Premeasurement object which contains the eigen system and basis of `factorization.`
 """
 function premeasure(factorization::KrylovKit.LanczosFactorization{T, R}) where {T, R}
-    h = SymTridiagonal(factorization.αs, factorization.βs[1:end-1])
+    h = SymTridiagonal(factorization.αs, factorization.βs)
     return Premeasurement(eigen(h), basis(factorization))
-end
-
-
-struct ObservableMemspace{Q<:Number}
-    matrix::Matrix{Q}
-    vector::Vector{Q}
-    function ObservableMemspace(::Type{Q}, d::Integer, D::Integer) where {Q<:Number}
-        return new{Q}(Matrix{Q}(undef, (d,d)), Vector{Q}(undef, D))
-    end
-    function ObservableMemspace(pm::Premeasurement{S, R, B}) where {S, R, B}
-        Q = promote_type(S, R, B)
-        d = length(pm.basis)
-        D = length(first(pm.basis))
-        return new{Q}(Matrix{Q}(undef, (d,d)), Vector{Q}(undef, D))
-    end
-end
-
-struct SusceptibilityMemspace{Q<:Number}
-    matrix1::Matrix{Q}
-    matrix2::Matrix{Q}
-    function SusceptibilityMemspace(pm::Premeasurement{S, R, B}) where {S, R, B}
-        Q = promote_type(S, R, B)
-        d = length(pm.basis)
-        return new{Q}(Matrix{Q}(undef, (d, d)), Matrix{Q}(undef, (d, d)))
-    end
-    function SusceptibilityMemspace(::Type{Q}, d::Integer) where {Q<:Number}
-        return new{Q}(Matrix{Q}(undef, (d, d)), Matrix{Q}(undef, (d, d)))
-    end
 end
 
 
@@ -92,17 +64,16 @@ function _project!(
     A::AbstractMatrix{S1},                                # (D, D)
     Vb::KrylovKit.OrthonormalBasis{<:AbstractVector{S2}}, # (D, d). d of vectors of length D
     u::AbstractMatrix{S3},                                # (d, d)
-    memspace::ObservableMemspace{Q},
+    work::AbstractVector{Q},
 ) where {Q<:Number, S1<:Number, S2<:Number, S3<:Number}
     V = Vb.basis
     d, D = length(V), length(first(V))
-    apq = memspace.matrix
-    aq = memspace.vector
-    @boundscheck size(A)   == (D, D) || throw(DimensionMismatch("$(size(A)), $D"))
-    @boundscheck size(u)   == (d, d) || throw(DimensionMismatch("$(size(u)), $d"))
-    @boundscheck size(aij) == (d, d) || throw(DimensionMismatch("$(size(aij)), $d"))
-    @boundscheck size(apq) == (d, d) || throw(DimensionMismatch("$(size(apq)), $d"))
-    @boundscheck size(aq)  == (D,)   || throw(DimensionMismatch("$(size(aq)), $D"))
+    size(A)   == (D, D) || throw(DimensionMismatch("$(size(A)), $D"))
+    size(u)   == (d, d) || throw(DimensionMismatch("$(size(u)), $d"))
+    size(aij) == (d, d) || throw(DimensionMismatch("$(size(aij)), $d"))
+    length(work) < d*d + D && resize!(work, d*d + D)    
+    aq = view(work, 1:D)
+    apq = reshape(view(work, D+1:D+d*d), d, d)
     for q in 1:d
         @inbounds LinearAlgebra.mul!(aq, A, V[q])
         for p in 1:d
@@ -122,17 +93,16 @@ function _project!(
     A::Hermitian{S1, <:AbstractMatrix{S1}},               # (D, D)
     Vb::KrylovKit.OrthonormalBasis{<:AbstractVector{S2}}, # (D, d)
     u::AbstractMatrix{S3},                                # (d, d)
-    memspace::ObservableMemspace{Q},
+    work::AbstractVector{Q},
 ) where {Q<:Number, S1<:Number, S2<:Number, S3<:Number}
     V = Vb.basis
     d, D = length(V), length(first(V))
-    apq = memspace.matrix
-    aq = memspace.vector
+    length(work) < d*d + D && resize!(work, d*d + D)
+    aq = view(work, 1:D)
+    apq = reshape(view(work, D+1:D+d*d), d, d)
     @boundscheck size(A) == (D, D) || throw(DimensionMismatch("$(size(A)), $D"))
     @boundscheck size(u) == (d, d) || throw(DimensionMismatch("$(size(u)), $d"))
     @boundscheck size(aij) == (d, d) || throw(DimensionMismatch("$(size(aij)), $d"))
-    @boundscheck size(apq) == (d, d) || throw(DimensionMismatch("$(size(apq)), $d"))
-    @boundscheck size(aq) == (D,) || throw(DimensionMismatch("$(size(aq)), $D"))
     for q in 1:d
         @inbounds LinearAlgebra.mul!(aq, A, V[q])
         for p in 1:q-1
@@ -147,43 +117,6 @@ function _project!(
     return aij
 end
 
-#=
-using QuantumHamiltonian
-# Computing elements of the operator representation is more costly than accessing elements of the vector.
-# The gain from vectorization is smaller than the loss due to duplicate applications of the operator representation.
-# => This is what I thought, but it actually runs slower than the naive version.
-function _project(A::AbstractOperatorRepresentation, Vb::KrylovKit.OrthonormalBasis, u::AbstractMatrix)
-    V = Vb.basis
-    d = length(V)
-    D = length(V[1])
-    Q = promote_type(eltype(A), eltype(V[1]), eltype(u))
-    apq = zeros(Q, (d, d))
-    let nt = Threads.nthreads()
-        local_apq_list = zeros(Q, (nt, d, d))
-        Threads.@threads for i in 1:D
-        #for i in 1:D
-                it = Threads.threadid()
-            for (j, v) in QuantumHamiltonian.get_row_iterator(A, i)
-                if 0 < j <= D
-                    for p in 1:d
-                        Vpi_v = conj(V[p][i]) * v
-                        for q in 1:d
-                            local_apq_list[it, p, q] += Vpi_v * V[q][j]
-                            # apq[p, q] += Vpi_v * V[q][j]
-                            # local_apq_list[it, p, q] += conj(V[p][i]) * v * V[q][j]
-                        end
-                    end
-                end
-            end
-        end
-        # for it in 1:nt
-        #     apq += local_apq_list[it, :, :]
-        # end
-    end
-    aij = adjoint(u) * apq * u
-    return aij
-end
-=#
 
 """
     premeasure(pm::Premeasurement)
@@ -195,6 +128,7 @@ premeasure!(out::AbstractVector, pm::Premeasurement) = map!(abs2, out, view(pm.e
 
 premeasure(pm::Premeasurement, pow::Integer) = map((x,y) -> abs2(x) * y^pow, view(pm.eigen.vectors, 1, :), pm.eigen.values)
 premeasure!(out::AbstractVector, pm::Premeasurement, pow::Integer) = map((x,y) -> abs2(x) * y^pow, out, view(pm.eigen.vectors, 1, :), pm.eigen.values)
+
 
 """
     premeasureenergy(pm::Premeasurement)
@@ -209,20 +143,21 @@ premeasureenergy!(out::AbstractVector, pm::Premeasurement, pow::Integer=1) = map
 
 Premeasure observable. Return the matrix elements of the observable.
 """
-function premeasure(pm::Premeasurement{S, R, B, MS, MR, MB}, obs::Observable{SO}, memspace::ObservableMemspace{M}) where {S, R, B, MS, MR, MB, SO, M}
-    Q = promote_type(S, R, B, SO, M)
+function premeasure(pm::Premeasurement, obs::Observable, work::AbstractVector{Q}) where {Q}
     d = length(pm.eigen.values)
-    aij = Matrix{Q}(undef, (d,d))
-    premeasure!(aij, pm, obs, memspace)
+    aij = Matrix{Q}(undef, (d, d))
+    premeasure!(aij, pm, obs, work)
+    return aij
 end
 
-function premeasure!(aij::AbstractMatrix{Q}, pm::Premeasurement{S, R, B}, obs::Observable, memspace::ObservableMemspace) where {Q<:Number, S, R, B}
+
+function premeasure!(aij::AbstractMatrix{Q}, pm::Premeasurement, obs::Observable, work::AbstractVector{Q}) where {Q<:Number}
     V = pm.basis
     d = length(pm.eigen.values)
     u = pm.eigen.vectors
     A = obs.observable
     @boundscheck size(aij) == (d, d) || throw(DimensionMismatch("$(size(aij)), $d"))
-    _project!(aij, A, V, u, memspace)
+    _project!(aij, A, V, u, work)
     for i in 1:d
         @inbounds view(aij, i, :) .*= u[1, i]
         @inbounds view(aij, :, i) .*= conj(u[1, i])
@@ -236,33 +171,51 @@ end
 
 Premeasure static susceptibility. Return the tensor elements of susceptibility.
 """
-function premeasure(pm::Premeasurement{S, R, B}, obs::Susceptibility{SS}, om::ObservableMemspace{OM}, sm::SusceptibilityMemspace{SM}) where {S, R, B, SS, OM, SM}
-    Q = promote_type(S, R, B, SS, OM, SM)
+function premeasure(pm::Premeasurement, obs::Susceptibility, work::AbstractVector{Q}) where {Q}
     d = length(pm.eigen.values)
     m = Array{Q}(undef, (d, d, d))
-    premeasure!(m, pm, obs, om, sm)
+    premeasure!(m, pm, obs, work)
+    return m
 end
 
 
-function premeasure!(m::AbstractArray{Q, 3}, pm::Premeasurement, obs::Susceptibility, om::ObservableMemspace, sm::SusceptibilityMemspace) where {Q}
+"""
+    premeasure!(m, pm, susc, work)
+
+# Arguments
+- `work::AbstractVector`:: should have at least size D + 2*d² (D+d² for projection, and d² for caching one of the results)
+"""
+function premeasure!(
+    m::AbstractArray{Q, 3},
+    pm::Premeasurement,
+    obs::Susceptibility,
+    work::AbstractVector{Q},
+) where {Q}
     V = pm.basis
     u = pm.eigen.vectors
     d = length(pm.eigen.values)
     A = obs.observable
     B = obs.field
 
-    aij = sm.matrix1
-    bjk = sm.matrix2
+    size(m) == (d, d, d) || throw(DimensionMismatch())
+    length(work) < D + d*d*2 && resize!(work, D + d*d*2)
 
-    _project!(aij, A, V, u, om)
-    _project!(bjk, B, V, u, om)
-
+    aij = reshape(view(work, D+d*d+1:D+d*d*2), d, d)
+    _project!(aij, A, V, u, work)
     for i in 1:d
         view(aij, i, :) .*= u[1, i]
+    end
+    for k in 1:d
+        m[:, :, k] = aij
+    end
+
+    bjk = reshape(view(work, D+d*d+1:D+d*d*2), d, d)
+    _project!(bjk, B, V, u, work)
+    for i in 1:d
         view(bjk, :, i) .*= conj(u[1, i])
     end
-    for i in 1:d, j in 1:d, k in 1:d
-        m[i, j, k] = aij[i, j] * bjk[j, k]
+    for i in 1:d
+        m[i, :, :] .*= bjk
     end
     return m
 end
@@ -352,3 +305,74 @@ function measure(obs::AbstractArray{S1, 3}, E::AbstractVector{S2}, halfboltzmann
     #     for i in 1:d for j in 1:d for k in 1:d
     # )
 end
+
+
+
+
+#=
+using QuantumHamiltonian
+# Computing elements of the operator representation is more costly than accessing elements of the vector.
+# The gain from vectorization is smaller than the loss due to duplicate applications of the operator representation.
+# => This is what I thought, but it actually runs slower than the naive version.
+function _project(A::AbstractOperatorRepresentation, Vb::KrylovKit.OrthonormalBasis, u::AbstractMatrix)
+    V = Vb.basis
+    d = length(V)
+    D = length(V[1])
+    Q = promote_type(eltype(A), eltype(V[1]), eltype(u))
+    apq = zeros(Q, (d, d))
+    let nt = Threads.nthreads()
+        local_apq_list = zeros(Q, (nt, d, d))
+        Threads.@threads for i in 1:D
+        #for i in 1:D
+                it = Threads.threadid()
+            for (j, v) in QuantumHamiltonian.get_row_iterator(A, i)
+                if 0 < j <= D
+                    for p in 1:d
+                        Vpi_v = conj(V[p][i]) * v
+                        for q in 1:d
+                            local_apq_list[it, p, q] += Vpi_v * V[q][j]
+                            # apq[p, q] += Vpi_v * V[q][j]
+                            # local_apq_list[it, p, q] += conj(V[p][i]) * v * V[q][j]
+                        end
+                    end
+                end
+            end
+        end
+        # for it in 1:nt
+        #     apq += local_apq_list[it, :, :]
+        # end
+    end
+    aij = adjoint(u) * apq * u
+    return aij
+end
+=#
+
+
+
+# struct ObservableMemspace{Q<:Number}
+#     matrix::Matrix{Q}
+#     vector::Vector{Q}
+#     function ObservableMemspace(::Type{Q}, d::Integer, D::Integer) where {Q<:Number}
+#         return new{Q}(Matrix{Q}(undef, (d,d)), Vector{Q}(undef, D))
+#     end
+#     function ObservableMemspace(pm::Premeasurement{S, R, B}) where {S, R, B}
+#         Q = promote_type(S, R, B)
+#         d = length(pm.basis)
+#         D = length(first(pm.basis))
+#         return new{Q}(Matrix{Q}(undef, (d,d)), Vector{Q}(undef, D))
+#     end
+# end
+
+
+# struct SusceptibilityMemspace{Q<:Number}
+#     matrix1::Matrix{Q}
+#     matrix2::Matrix{Q}
+#     function SusceptibilityMemspace(::Type{Q}, d::Integer) where {Q<:Number}
+#         return new{Q}(Matrix{Q}(undef, (d, d)), Matrix{Q}(undef, (d, d)))
+#     end
+#     function SusceptibilityMemspace(pm::Premeasurement{S, R, B}) where {S, R, B}
+#         Q = promote_type(S, R, B)
+#         d = length(pm.basis)
+#         return new{Q}(Matrix{Q}(undef, (d, d)), Matrix{Q}(undef, (d, d)))
+#     end    
+# end

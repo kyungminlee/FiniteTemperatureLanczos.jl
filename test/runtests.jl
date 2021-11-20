@@ -80,13 +80,13 @@ end
         pre_E = premeasure(pm, 1)
         pre_E2 = premeasure(pm, 2)
 
-        memspace = ObservableMemspace(ComplexF64, d, D)
-        pre_σx = premeasure(pm, Observable(σx), memspace)
-        pre_σy = premeasure(pm, Observable(σy), memspace)
-        pre_σz = premeasure(pm, Observable(σz), memspace)
-        pre_Hσx = premeasure(pm, Observable(Hσx), memspace)
-        pre_Hσy = premeasure(pm, Observable(Hσy), memspace)
-        pre_Hσz = premeasure(pm, Observable(Hσz), memspace)
+        work = Vector{ComplexF64}(undef, D+d*d)
+        pre_σx = premeasure(pm, Observable(σx), work)
+        pre_σy = premeasure(pm, Observable(σy), work)
+        pre_σz = premeasure(pm, Observable(σz), work)
+        pre_Hσx = premeasure(pm, Observable(Hσx), work)
+        pre_Hσy = premeasure(pm, Observable(Hσy), work)
+        pre_Hσz = premeasure(pm, Observable(Hσz), work)
         for (iT, T) in enumerate(temperatures)
             # @show T
             obs_z[iT]  += measure(pre_z, pm.eigen.values, T)
@@ -176,15 +176,16 @@ end
     @test all(isapprox.(pm1.basis, pm2.basis))
     @test isapprox(pm1.eigen.values, pm2.eigen.values)
 
-    om1 = ObservableMemspace(pm1)
-    om2 = ObservableMemspace(pm2)
+    work = let d=6, D=dimension(hsr)
+        Vector{ComplexF64}(undef, D + d*d)
+    end
 
     pre_z1 = premeasure(pm1)
     pre_z2 = premeasure(pm2)
     pre_E1 = premeasure(pm1, 1)
     pre_E2 = premeasure(pm2, 1)
-    pre_sc1 = premeasure(pm1, Observable(spin_corr_rep), om1)
-    pre_sc2 = premeasure(pm2, Observable(spin_corr_mat), om2)
+    pre_sc1 = premeasure(pm1, Observable(spin_corr_rep), work)
+    pre_sc2 = premeasure(pm2, Observable(spin_corr_mat), work)
     for (iT, T) in enumerate(temperatures)
         # @show T
         obs_z1[iT]  += measure(pre_z1, pm1.eigen.values, T)
