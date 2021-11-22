@@ -1,14 +1,14 @@
 name = "FiniteTemperatureLanczos"
 uuid = "3017c631-05ab-49d4-ba00-44a31b8d5f6d"
 authors = ["Kyungmin Lee <kyungmin.lee.42@gmail.com>"]
-version = "0.1.2"
+version = "0.2.0"
 
 [deps]
 KrylovKit = "0b1a1467-8014-51b9-945f-bf0ae24f4b77"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 
 [compat]
-julia = "1"
+julia = "^1.6"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
