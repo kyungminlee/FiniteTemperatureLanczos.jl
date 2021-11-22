@@ -48,7 +48,11 @@ end
 Return the Premeasurement object which contains the eigen system and basis of `factorization.`
 """
 function premeasure(factorization::KrylovKit.LanczosFactorization{T, R}) where {T, R}
-    h = SymTridiagonal(factorization.αs, factorization.βs)
+    if VERSION >= v"1.6"
+        h = SymTridiagonal(factorization.αs, factorization.βs)
+    else
+        h = SymTridiagonal(factorization.αs, factorization.βs[1:end-1])
+    end
     return Premeasurement(eigen(h), basis(factorization))
 end
 
@@ -127,7 +131,7 @@ premeasure(pm::Premeasurement) = abs2.(view(pm.eigen.vectors, 1, :))
 premeasure!(out::AbstractVector, pm::Premeasurement) = map!(abs2, out, view(pm.eigen.vectors, 1, :))
 
 premeasure(pm::Premeasurement, pow::Integer) = map((x,y) -> abs2(x) * y^pow, view(pm.eigen.vectors, 1, :), pm.eigen.values)
-premeasure!(out::AbstractVector, pm::Premeasurement, pow::Integer) = map((x,y) -> abs2(x) * y^pow, out, view(pm.eigen.vectors, 1, :), pm.eigen.values)
+premeasure!(out::AbstractVector, pm::Premeasurement, pow::Integer) = map!((x,y) -> abs2(x) * y^pow, out, view(pm.eigen.vectors, 1, :), pm.eigen.values)
 
 
 """
@@ -136,7 +140,8 @@ premeasure!(out::AbstractVector, pm::Premeasurement, pow::Integer) = map((x,y) -
 Premeasure energy. Return the vector elements of the energy.
 """
 premeasureenergy(pm::Premeasurement, pow::Integer=1) = map((x,y) -> abs2(x) * y^pow, view(pm.eigen.vectors, 1, :), pm.eigen.values)
-premeasureenergy!(out::AbstractVector, pm::Premeasurement, pow::Integer=1) = map((x,y) -> abs2(x) * y^pow, out, view(pm.eigen.vectors, 1, :), pm.eigen.values)
+premeasureenergy!(out::AbstractVector, pm::Premeasurement, pow::Integer=1) = map!((x,y) -> abs2(x) * y^pow, out, view(pm.eigen.vectors, 1, :), pm.eigen.values)
+
 
 """
     premeasure(pm::Premeasurement, obs::Observable)
@@ -247,6 +252,7 @@ function measure(obs::AbstractArray, E::AbstractVector{R}, temperature::Real; to
     return measure(obs, E, halfboltzmann)
 end
 
+
 """
     measure(obs, E, halfboltzmann)
 
@@ -271,6 +277,7 @@ function measure(obs::AbstractVector{S1}, E::AbstractVector{S2}, halfboltzmann::
     # return mapreduce(x->x[1]*x[2]*x[3], +, zip(halfboltzmann, halfboltzmann, obs))
     # return sum(halfboltzmann[i] * halfboltzmann[i] * obs[i] for i in 1:d)
 end
+
 
 function measure(obs::AbstractMatrix{S1}, E::AbstractVector{S2}, halfboltzmann::AbstractVector{S3}) where {S1<:Number, S2<:Real, S3<:Real}
     d = length(E)
